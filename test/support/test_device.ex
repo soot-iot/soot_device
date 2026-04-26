@@ -12,6 +12,7 @@ defmodule SootDevice.Test.TestDevice do
     on_change(:led, &__MODULE__.handle_led/2)
     on_change(:sample_rate, &__MODULE__.handle_sample_rate/2)
     report(:firmware_version, value: "0.4.2")
+    report(:uptime, every: 60_000, value: &__MODULE__.read_uptime/0)
   end
 
   commands do
@@ -30,4 +31,5 @@ defmodule SootDevice.Test.TestDevice do
   def handle_reboot(_payload, _meta), do: :ok
   def handle_read_config(_payload, _meta), do: {:reply, "{}"}
   def read_vibration, do: %{"x" => 1.0}
+  def read_uptime, do: 42
 end
