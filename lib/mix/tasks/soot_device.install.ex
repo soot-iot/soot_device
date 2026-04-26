@@ -57,14 +57,20 @@ if Code.ensure_loaded?(Igniter) do
         example: __MODULE__.Docs.example(),
         only: nil,
         composes: [],
-        schema: [example: :boolean, yes: :boolean],
+        schema: [
+          example: :boolean,
+          yes: :boolean,
+          bootstrap_cert: :string,
+          bootstrap_key: :string
+        ],
         defaults: [example: false, yes: false],
-        aliases: [y: :yes, e: :example]
+        aliases: [y: :yes, e: :example, c: :bootstrap_cert, k: :bootstrap_key]
       }
     end
 
     @impl Igniter.Mix.Task
     def igniter(igniter) do
+      options = igniter.args.options
       app_name = Igniter.Project.Application.app_name(igniter)
       device_module = Igniter.Project.Module.module_name(igniter, "Device")
       config_module = Igniter.Project.Module.module_name(igniter, "SootDeviceConfig")
@@ -77,7 +83,54 @@ if Code.ensure_loaded?(Igniter) do
       |> seed_application_config(app_name)
       |> add_supervisor_child(device_module, config_module)
       |> scaffold_qemu_helper(qemu_module)
-      |> note_next_steps(app_name, device_module, qemu_module)
+      |> bake_bootstrap_credentials(options)
+      |> note_next_steps(app_name, device_module, qemu_module, options)
+    end
+
+    # When the operator passes `--bootstrap-cert <path>` and
+    # `--bootstrap-key <path>`, copy the supplied PEMs into the
+    # project's `rootfs_overlay/etc/soot/` so Nerves bakes them
+    # into the firmware. The default env-var paths in
+    # `lib/<app>/device.ex` already point at /etc/soot/bootstrap.{pem,key}
+    # — the files just need to exist on the rootfs.
+    #
+    # Both flags must be present together; one without the other is a
+    # configuration error.
+    defp bake_bootstrap_credentials(igniter, options) do
+      cert = options[:bootstrap_cert]
+      key = options[:bootstrap_key]
+
+      cond do
+        cert && key ->
+          igniter
+          |> bake_pem!("rootfs_overlay/etc/soot/bootstrap.pem", cert)
+          |> bake_pem!("rootfs_overlay/etc/soot/bootstrap.key", key)
+
+        cert || key ->
+          Igniter.add_warning(igniter, """
+          --bootstrap-cert and --bootstrap-key must be passed together.
+          Neither was baked into the rootfs_overlay. Provide both flags
+          or omit both (and set SOOT_BOOTSTRAP_CERT / _KEY at runtime).
+          """)
+
+        true ->
+          igniter
+      end
+    end
+
+    defp bake_pem!(igniter, target, source_path) do
+      unless File.exists?(source_path) do
+        Mix.raise("--bootstrap-* path does not exist: #{source_path}")
+      end
+
+      contents = File.read!(source_path)
+
+      if Igniter.exists?(igniter, target) do
+        # Operator already has a baked cert/key. Don't overwrite.
+        igniter
+      else
+        Igniter.create_new_file(igniter, target, contents)
+      end
     end
 
     defp create_config_module(igniter, config_module, app_name) do
@@ -160,8 +213,8 @@ if Code.ensure_loaded?(Igniter) do
           serial: "PLACEHOLDER-SERIAL"
 
         identity do
-          bootstrap_cert_path System.get_env("SOOT_BOOTSTRAP_CERT", "priv/pki/bootstrap.pem")
-          bootstrap_key_path System.get_env("SOOT_BOOTSTRAP_KEY", "priv/pki/bootstrap.key")
+          bootstrap_cert_path System.get_env("SOOT_BOOTSTRAP_CERT", "/etc/soot/bootstrap.pem")
+          bootstrap_key_path System.get_env("SOOT_BOOTSTRAP_KEY", "/etc/soot/bootstrap.key")
           operational_storage :file_system
           storage_dir System.get_env("SOOT_PERSISTENCE_DIR", "/data/soot")
           enrollment_token_env "SOOT_ENROLLMENT_TOKEN"
@@ -416,8 +469,32 @@ if Code.ensure_loaded?(Igniter) do
       """
     end
 
-    defp note_next_steps(igniter, app_name, device_module, qemu_module) do
+    defp note_next_steps(igniter, app_name, device_module, qemu_module, options) do
       env_prefix = app_name |> Atom.to_string() |> String.upcase()
+
+      bootstrap_lines =
+        if options[:bootstrap_cert] && options[:bootstrap_key] do
+          """
+
+          Bootstrap credentials baked into the firmware:
+            * `rootfs_overlay/etc/soot/bootstrap.pem`
+            * `rootfs_overlay/etc/soot/bootstrap.key`
+
+          The DSL defaults to reading these from `/etc/soot/`. Override
+          at runtime via `SOOT_BOOTSTRAP_CERT` / `SOOT_BOOTSTRAP_KEY`.
+          """
+        else
+          """
+
+          Bootstrap credentials NOT baked. The DSL defaults to reading
+          from `/etc/soot/bootstrap.{pem,key}`; either:
+
+            * Re-run with `--bootstrap-cert <path> --bootstrap-key <path>`
+              to bake them into the firmware via `rootfs_overlay/`.
+            * Set `SOOT_BOOTSTRAP_CERT` / `SOOT_BOOTSTRAP_KEY` at runtime
+              to point at writable paths on your target.
+          """
+        end
 
       Igniter.add_notice(igniter, """
       soot_device installed.
@@ -440,19 +517,14 @@ if Code.ensure_loaded?(Igniter) do
           `:#{app_name}, :contract_url` etc., env-overridable via
           `#{env_prefix}_CONTRACT_URL`, `#{env_prefix}_ENROLL_URL`,
           `#{env_prefix}_SERIAL`, `#{env_prefix}_PERSISTENCE_DIR`.
-          The bootstrap cert/key paths are read inside the DSL via
-          `SOOT_BOOTSTRAP_CERT` / `SOOT_BOOTSTRAP_KEY`.
-
+      #{bootstrap_lines}
       Next steps:
 
-        1. Drop a bootstrap cert + key under `priv/pki/` (or point
-           `SOOT_BOOTSTRAP_CERT` / `_KEY` at the right paths on your
-           target).
-        2. Set `#{env_prefix}_CONTRACT_URL` and friends to your Soot
+        1. Set `#{env_prefix}_CONTRACT_URL` and friends to your Soot
            backend URLs.
-        3. Boot the app — the device supervisor blocks on enrollment,
+        2. Boot the app — the device supervisor blocks on enrollment,
            then starts the configured shadow/commands/telemetry.
-        4. For QEMU integration tests:
+        3. For QEMU integration tests:
              MIX_TARGET=qemu_aarch64 mix firmware
              mix test --include qemu
       """)
