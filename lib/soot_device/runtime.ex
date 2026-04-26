@@ -35,9 +35,10 @@ defmodule SootDevice.Runtime do
   end
 
   @doc """
-  Expand the DSL into a flat list of `Supervisor.child_spec/1` tuples.
+  Expand the DSL into a flat list of `{module, opts}` tuples that
+  `Supervisor.start_link/2` accepts as children.
   """
-  @spec child_specs(module(), keyword()) :: [Supervisor.child_spec()]
+  @spec child_specs(module(), keyword()) :: [{module(), keyword()}]
   def child_specs(device, extra_opts \\ []) do
     use_opts = device.__soot_device_opts__()
     extra_opts = Keyword.merge(use_opts, extra_opts)
