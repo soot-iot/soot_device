@@ -107,7 +107,8 @@ defmodule SootDevice.Runtime do
     handlers = Info.shadow_handlers(device)
     options = Info.shadow_options(device)
 
-    if handlers == %{} and options[:base_topic] == nil and not Keyword.get(extra_opts, :force_shadow?, false) do
+    if handlers == %{} and options[:base_topic] == nil and
+         not Keyword.get(extra_opts, :force_shadow?, false) do
       nil
     else
       base = options[:base_topic] || "tenants/_/devices/#{serial}/shadow"
