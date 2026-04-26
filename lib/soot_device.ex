@@ -70,7 +70,11 @@ defmodule SootDevice do
     opt_schema: [
       contract_url: [type: :string, required: true, doc: "URL of the contract bundle endpoint."],
       enroll_url: [type: :string, required: true, doc: "URL of the enrollment endpoint."],
-      serial: [type: :string, required: true, doc: "Stable serial number identifying this device."]
+      serial: [
+        type: :string,
+        required: true,
+        doc: "Stable serial number identifying this device."
+      ]
     ]
 
   @impl Spark.Dsl

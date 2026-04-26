@@ -35,9 +35,10 @@ defmodule SootDevice.Runtime do
   end
 
   @doc """
-  Expand the DSL into a flat list of `Supervisor.child_spec/1` tuples.
+  Expand the DSL into a flat list of `{module, opts}` tuples that
+  `Supervisor.start_link/2` accepts as children.
   """
-  @spec child_specs(module(), keyword()) :: [Supervisor.child_spec()]
+  @spec child_specs(module(), keyword()) :: [{module(), keyword()}]
   def child_specs(device, extra_opts \\ []) do
     use_opts = device.__soot_device_opts__()
     extra_opts = Keyword.merge(use_opts, extra_opts)
@@ -95,7 +96,7 @@ defmodule SootDevice.Runtime do
       {Enrollment, enrollment_opts}
     ]
     |> append_if(mqtt_opts != nil, fn -> {MQTT.Client, mqtt_opts} end)
-    |> append_if(true, fn -> {Contract.Refresh, contract_opts} end)
+    |> Kernel.++([{Contract.Refresh, contract_opts}])
     |> append_if(shadow_opts != nil, fn -> {Shadow.Sync, shadow_opts} end)
     |> append_if(commands_opts != nil, fn -> {Commands.Dispatcher, commands_opts} end)
     |> append_if(telemetry_opts != nil, fn -> {Telemetry.Pipeline, telemetry_opts} end)
@@ -107,7 +108,8 @@ defmodule SootDevice.Runtime do
     handlers = Info.shadow_handlers(device)
     options = Info.shadow_options(device)
 
-    if handlers == %{} and options[:base_topic] == nil and not Keyword.get(extra_opts, :force_shadow?, false) do
+    if handlers == %{} and options[:base_topic] == nil and
+         not Keyword.get(extra_opts, :force_shadow?, false) do
       nil
     else
       base = options[:base_topic] || "tenants/_/devices/#{serial}/shadow"

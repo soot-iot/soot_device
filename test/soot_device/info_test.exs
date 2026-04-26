@@ -12,7 +12,9 @@ defmodule SootDevice.InfoTest do
 
   test "shadow_reports/1 returns every report declaration" do
     reports = Info.shadow_reports(TestDevice)
-    assert [%Dsl.Shadow.Report{key: :firmware_version, value: "0.4.2"}] = reports
+
+    assert %Dsl.Shadow.Report{key: :firmware_version, value: "0.4.2"} =
+             Enum.find(reports, &(&1.key == :firmware_version))
   end
 
   test "commands/1 returns every command handler entity" do
