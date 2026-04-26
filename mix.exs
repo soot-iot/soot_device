@@ -69,6 +69,9 @@ defmodule SootDevice.MixProject do
       {:spark, "~> 2.6"},
       {:jason, "~> 1.4"},
       {:soot_device_protocol, path: "../soot_device_protocol"},
+      # Optional installer tooling — only loaded when the consumer is
+      # running `mix igniter.install soot_device`.
+      {:igniter, "~> 0.6", optional: true},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: [:dev], runtime: false},
