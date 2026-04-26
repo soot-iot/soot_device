@@ -1,4 +1,5 @@
 defmodule SootDevice.Test.TestDevice do
+  @moduledoc false
   use SootDevice,
     contract_url: "https://soot.example.com/.well-known/soot/contract",
     enroll_url: "https://soot.example.com/enroll",
