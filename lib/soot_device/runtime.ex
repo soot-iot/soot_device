@@ -95,7 +95,7 @@ defmodule SootDevice.Runtime do
       {Enrollment, enrollment_opts}
     ]
     |> append_if(mqtt_opts != nil, fn -> {MQTT.Client, mqtt_opts} end)
-    |> append_if(true, fn -> {Contract.Refresh, contract_opts} end)
+    |> Kernel.++([{Contract.Refresh, contract_opts}])
     |> append_if(shadow_opts != nil, fn -> {Shadow.Sync, shadow_opts} end)
     |> append_if(commands_opts != nil, fn -> {Commands.Dispatcher, commands_opts} end)
     |> append_if(telemetry_opts != nil, fn -> {Telemetry.Pipeline, telemetry_opts} end)
