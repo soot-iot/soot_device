@@ -30,11 +30,13 @@ Findings against the playbook in `../QUALITY-REVIEW.md`. Baseline:
   reports test asserts shape but never exercises a report with a
   schedule.
 * `SootDevice.Runtime.start_link/2` — no test boots the supervision
-  tree end to end. With `SootDeviceProtocol.Test.{FakeHTTP, PKI}` now
-  shipping in `lib/`, an integration test that wires a real
-  `Supervisor.start_link` against the in-memory transport + FakeHTTP
-  is cheap to write and catches whole categories of "compiles but
-  doesn't boot" regressions.
+  tree end to end. **Deferred** until soot_device_protocol's quality
+  branch lands: that branch promotes
+  `SootDeviceProtocol.Test.{FakeHTTP, PKI, Ingest}` from `test/support/`
+  to `lib/`, which is what makes them reachable from soot_device's
+  test suite via the path dep. Once that merges, add a test that
+  wires `Runtime.start_link/2` with FakeHTTP, the in-memory
+  transport, and a PKI-built bundle and asserts every child boots.
 
 ## Tooling gaps
 
