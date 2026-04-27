@@ -68,7 +68,7 @@ defmodule SootDevice.MixProject do
     [
       {:spark, "~> 2.6"},
       {:jason, "~> 1.4"},
-      {:soot_device_protocol, path: "../soot_device_protocol"},
+      {:soot_device_protocol, github: "soot-iot/soot_device_protocol", branch: "main"},
       # Optional installer tooling — only loaded when the consumer is
       # running `mix igniter.install soot_device`.
       {:igniter, "~> 0.6", optional: true},
