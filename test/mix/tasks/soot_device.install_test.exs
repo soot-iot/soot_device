@@ -228,8 +228,17 @@ defmodule Mix.Tasks.SootDevice.InstallTest do
     end
 
     test "with --bootstrap-cert and --bootstrap-key, bakes both into rootfs_overlay" do
-      cert_path = write_pem!("bootstrap.pem", "-----BEGIN CERTIFICATE-----\nFAKECERT\n-----END CERTIFICATE-----\n")
-      key_path = write_pem!("bootstrap.key", "-----BEGIN PRIVATE KEY-----\nFAKEKEY\n-----END PRIVATE KEY-----\n")
+      cert_path =
+        write_pem!(
+          "bootstrap.pem",
+          "-----BEGIN CERTIFICATE-----\nFAKECERT\n-----END CERTIFICATE-----\n"
+        )
+
+      key_path =
+        write_pem!(
+          "bootstrap.key",
+          "-----BEGIN PRIVATE KEY-----\nFAKEKEY\n-----END PRIVATE KEY-----\n"
+        )
 
       result =
         test_project(files: %{})

@@ -119,7 +119,7 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp bake_pem!(igniter, target, source_path) do
-      unless File.exists?(source_path) do
+      if !File.exists?(source_path) do
         Mix.raise("--bootstrap-* path does not exist: #{source_path}")
       end
 
