@@ -66,6 +66,102 @@ defmodule Mix.Tasks.SootDevice.InstallTest do
       assert diff =~ "commands do"
       assert diff =~ "telemetry do"
     end
+
+    test "wires :cpu / :memory / :disk telemetry streams under --example (default)" do
+      result =
+        test_project(files: %{})
+        |> Igniter.compose_task("soot_device.install", [])
+
+      diff = diff(result, only: "lib/test/device.ex")
+      assert diff =~ "stream :cpu do"
+      assert diff =~ "Test.Telemetry.SystemHealth.cpu_sample/0"
+      assert diff =~ "stream :memory do"
+      assert diff =~ "Test.Telemetry.SystemHealth.memory_sample/0"
+      assert diff =~ "stream :disk do"
+      assert diff =~ "Test.Telemetry.SystemHealth.disk_sample/0"
+    end
+
+    test "leaves the telemetry block empty under --no-example" do
+      result =
+        test_project(files: %{})
+        |> Igniter.compose_task("soot_device.install", ["--no-example"])
+
+      diff = diff(result, only: "lib/test/device.ex")
+      refute diff =~ "stream :cpu"
+      refute diff =~ "stream :memory"
+      refute diff =~ "stream :disk"
+      assert diff =~ "telemetry do"
+      assert diff =~ "stream :vibration"
+    end
+  end
+
+  describe "system health module" do
+    test "creates lib/<app>/telemetry/system_health.ex under --example (default)" do
+      test_project(files: %{})
+      |> Igniter.compose_task("soot_device.install", [])
+      |> assert_creates("lib/test/telemetry/system_health.ex")
+    end
+
+    test "is not generated under --no-example" do
+      result =
+        test_project(files: %{})
+        |> Igniter.compose_task("soot_device.install", ["--no-example"])
+
+      diff = diff(result)
+      refute diff =~ "lib/test/telemetry/system_health.ex"
+    end
+
+    test "exposes cpu_sample/0, memory_sample/0, disk_sample/0 with backend-matching field names" do
+      result =
+        test_project(files: %{})
+        |> Igniter.compose_task("soot_device.install", [])
+
+      diff = diff(result, only: "lib/test/telemetry/system_health.ex")
+
+      # Function shape — three samplers, each returning a map.
+      assert diff =~ "def cpu_sample"
+      assert diff =~ "def memory_sample"
+      assert diff =~ "def disk_sample"
+
+      # CPU field names match the backend's default :cpu stream.
+      assert diff =~ "load_1m:"
+      assert diff =~ "load_5m:"
+      assert diff =~ "load_15m:"
+      assert diff =~ "user_pct:"
+      assert diff =~ "system_pct:"
+      assert diff =~ "iowait_pct:"
+
+      # Memory field names match the backend's default :memory stream.
+      assert diff =~ "total_bytes:"
+      assert diff =~ "used_bytes:"
+      assert diff =~ "available_bytes:"
+      assert diff =~ "cached_bytes:"
+      assert diff =~ "swap_total_bytes:"
+      assert diff =~ "swap_used_bytes:"
+
+      # Disk field names match the backend's default :disk stream.
+      assert diff =~ "mount_point:"
+      assert diff =~ "inode_total:"
+      assert diff =~ "inode_used:"
+    end
+
+    test "adds :os_mon to extra_applications under --example" do
+      result =
+        test_project(files: %{})
+        |> Igniter.compose_task("soot_device.install", [])
+
+      diff = diff(result, only: "mix.exs")
+      assert diff =~ ":os_mon"
+    end
+
+    test "does not add :os_mon under --no-example" do
+      result =
+        test_project(files: %{})
+        |> Igniter.compose_task("soot_device.install", ["--no-example"])
+
+      diff = diff(result, only: "mix.exs")
+      refute diff =~ ":os_mon"
+    end
   end
 
   describe "config helper module" do

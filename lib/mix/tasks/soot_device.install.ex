@@ -36,8 +36,17 @@ defmodule Mix.Tasks.SootDevice.Install.Docs do
 
     ## Options
 
-      * `--example` — currently a no-op; reserved for future use to
-        seed example handlers.
+      * `--example` / `--no-example` — when set (default: ON),
+        generates a `<App>.Telemetry.SystemHealth` module that samples
+        CPU load + utilization, memory, and disk usage on Linux /
+        Nerves targets, and wires three telemetry streams (`:cpu`,
+        `:memory`, `:disk`) in the generated device module pointing
+        at it. Adapted from
+        `NervesHubLink.Extensions.Health.MetricSet`. Field names
+        match the backend's `soot_telemetry` default streams of the
+        same names so the data lands in ClickHouse without further
+        mapping. Pass `--no-example` to leave the `telemetry do …
+        end` block empty.
       * `--yes` — answer "yes" to dependency-fetching prompts.
     """
   end
@@ -63,7 +72,7 @@ if Code.ensure_loaded?(Igniter) do
           bootstrap_cert: :string,
           bootstrap_key: :string
         ],
-        defaults: [example: false, yes: false],
+        defaults: [example: true, yes: false],
         aliases: [y: :yes, e: :example, c: :bootstrap_cert, k: :bootstrap_key]
       }
     end
@@ -75,11 +84,14 @@ if Code.ensure_loaded?(Igniter) do
       device_module = Igniter.Project.Module.module_name(igniter, "Device")
       config_module = Igniter.Project.Module.module_name(igniter, "SootDeviceConfig")
       qemu_module = Igniter.Project.Module.module_name(igniter, "QEMU")
+      health_module = Igniter.Project.Module.module_name(igniter, "Telemetry.SystemHealth")
 
       igniter
       |> Igniter.Project.Formatter.import_dep(:soot_device)
       |> create_config_module(config_module, app_name)
-      |> create_device_module(device_module)
+      |> create_device_module(device_module, health_module, options)
+      |> maybe_create_health_module(health_module, options)
+      |> maybe_add_os_mon(options)
       |> seed_application_config(app_name)
       |> add_supervisor_child(device_module, config_module)
       |> scaffold_qemu_helper(qemu_module)
@@ -190,58 +202,249 @@ if Code.ensure_loaded?(Igniter) do
       )
     end
 
-    defp create_device_module(igniter, device_module) do
+    defp create_device_module(igniter, device_module, health_module, options) do
       Igniter.Project.Module.create_module(
         igniter,
         device_module,
-        """
-        @moduledoc \"\"\"
-        Declarative device definition.
-
-        The compile-time `contract_url` / `enroll_url` / `serial` are
-        placeholders — the runtime values come from
-        `<App>.SootDeviceConfig.device_opts/0` and override these via
-        `Keyword.merge` inside `SootDevice.Runtime`.
-
-        Generated stub — flesh out the four DSL sections as your
-        device behavior grows.
-        \"\"\"
-
-        use SootDevice,
-          contract_url: "https://placeholder.local/.well-known/soot/contract",
-          enroll_url: "https://placeholder.local/enroll",
-          serial: "PLACEHOLDER-SERIAL"
-
-        identity do
-          bootstrap_cert_path System.get_env("SOOT_BOOTSTRAP_CERT", "/etc/soot/bootstrap.pem")
-          bootstrap_key_path System.get_env("SOOT_BOOTSTRAP_KEY", "/etc/soot/bootstrap.key")
-          operational_storage :file_system
-          storage_dir System.get_env("SOOT_PERSISTENCE_DIR", "/data/soot")
-          enrollment_token_env "SOOT_ENROLLMENT_TOKEN"
-        end
-
-        shadow do
-          # on_change :led, &__MODULE__.handle_led/2
-        end
-
-        commands do
-          # handle :reboot, &__MODULE__.handle_reboot/2, payload_format: :empty
-        end
-
-        telemetry do
-          # stream :vibration do
-          #   sample interval: 1_000, source: &__MODULE__.read_vibration/0
-          # end
-        end
-
-        # Stub handlers shown for reference. Uncomment + tailor as you
-        # populate the DSL above.
-        #
-        # def handle_led(_value, _meta), do: :ok
-        # def handle_reboot(_payload, _meta), do: :ok
-        # def read_vibration, do: %{"x" => :rand.uniform()}
-        """
+        device_module_body(health_module, options)
       )
+    end
+
+    defp device_module_body(health_module, options) do
+      health_inspect = inspect(health_module)
+
+      telemetry_body =
+        if options[:example] do
+          """
+            stream :cpu do
+              sample interval: 60_000, source: &#{health_inspect}.cpu_sample/0
+            end
+
+            stream :memory do
+              sample interval: 60_000, source: &#{health_inspect}.memory_sample/0
+            end
+
+            stream :disk do
+              sample interval: 300_000, source: &#{health_inspect}.disk_sample/0
+            end
+          """
+        else
+          """
+            # stream :vibration do
+            #   sample interval: 1_000, source: &__MODULE__.read_vibration/0
+            # end
+          """
+        end
+
+      """
+      @moduledoc \"\"\"
+      Declarative device definition.
+
+      The compile-time `contract_url` / `enroll_url` / `serial` are
+      placeholders — the runtime values come from
+      `<App>.SootDeviceConfig.device_opts/0` and override these via
+      `Keyword.merge` inside `SootDevice.Runtime`.
+
+      Generated stub — flesh out the four DSL sections as your
+      device behavior grows.
+      \"\"\"
+
+      use SootDevice,
+        contract_url: "https://placeholder.local/.well-known/soot/contract",
+        enroll_url: "https://placeholder.local/enroll",
+        serial: "PLACEHOLDER-SERIAL"
+
+      identity do
+        bootstrap_cert_path System.get_env("SOOT_BOOTSTRAP_CERT", "/etc/soot/bootstrap.pem")
+        bootstrap_key_path System.get_env("SOOT_BOOTSTRAP_KEY", "/etc/soot/bootstrap.key")
+        operational_storage :file_system
+        storage_dir System.get_env("SOOT_PERSISTENCE_DIR", "/data/soot")
+        enrollment_token_env "SOOT_ENROLLMENT_TOKEN"
+      end
+
+      shadow do
+        # on_change :led, &__MODULE__.handle_led/2
+      end
+
+      commands do
+        # handle :reboot, &__MODULE__.handle_reboot/2, payload_format: :empty
+      end
+
+      telemetry do
+      #{telemetry_body}end
+
+      # Stub handlers shown for reference. Uncomment + tailor as you
+      # populate the DSL above.
+      #
+      # def handle_led(_value, _meta), do: :ok
+      # def handle_reboot(_payload, _meta), do: :ok
+      # def read_vibration, do: %{"x" => :rand.uniform()}
+      """
+    end
+
+    defp maybe_create_health_module(igniter, health_module, options) do
+      if options[:example] do
+        Igniter.Project.Module.create_module(
+          igniter,
+          health_module,
+          health_module_body()
+        )
+      else
+        igniter
+      end
+    end
+
+    # Adapted from `NervesHubLink.Extensions.Health.MetricSet.{CPU,Memory,Disk}`.
+    # Each sampler returns a map keyed by the field names declared in
+    # the matching `:cpu` / `:memory` / `:disk` telemetry stream on
+    # the backend (`SootTelemetry.Stream.Definition` defaults from
+    # `mix soot_telemetry.install`). Numbers come from /proc on Linux
+    # and `:os_mon`'s `:cpu_sup` / `:disksup` for portable CPU + disk
+    # data; the operator owns this file post-install and can swap in
+    # board-specific probes (RPi `vcgencmd`, BMP-style sensors, etc.)
+    # without re-running the installer.
+    defp health_module_body do
+      ~S'''
+      @moduledoc """
+      Default device health metric collection — CPU load + utilization,
+      memory, and disk usage. Generated by
+      `mix soot_device.install --example`. Adapted from
+      `NervesHubLink.Extensions.Health.MetricSet`. Operators own this
+      file; tailor the samplers as your device behavior grows.
+
+      The map keys returned by `cpu_sample/0`, `memory_sample/0`, and
+      `disk_sample/0` match the field names of the matching default
+      streams in `soot_telemetry`, so the data lands in ClickHouse
+      without an explicit field mapping.
+      """
+
+      @doc "CPU sample — load averages from /proc/loadavg + utilization from :cpu_sup."
+      @spec cpu_sample() :: map()
+      def cpu_sample do
+        Map.merge(load_averages(), cpu_utilization())
+      end
+
+      @doc "Memory sample — parsed from /proc/meminfo on Linux."
+      @spec memory_sample() :: map()
+      def memory_sample do
+        case File.read("/proc/meminfo") do
+          {:ok, content} -> parse_meminfo(content)
+          _ -> %{}
+        end
+      end
+
+      @doc "Disk sample for the root mount, via :disksup.get_disk_data/0."
+      @spec disk_sample() :: map()
+      def disk_sample do
+        ensure_os_mon_started()
+
+        case find_root_mount() do
+          {_mount, total_kb, capacity_pct} ->
+            total_bytes = total_kb * 1024
+            used_bytes = round(capacity_pct / 100 * total_bytes)
+
+            %{
+              mount_point: "/",
+              total_bytes: total_bytes,
+              used_bytes: used_bytes,
+              available_bytes: total_bytes - used_bytes,
+              # :disksup doesn't expose inode counts; left at zero.
+              # Override with `stat -f` or similar if the backend cares.
+              inode_total: 0,
+              inode_used: 0
+            }
+
+          _ ->
+            %{}
+        end
+      end
+
+      defp load_averages do
+        with {:ok, content} <- File.read("/proc/loadavg"),
+             [m1, m5, m15, _, _] <- String.split(content, " "),
+             {f1, _} <- Float.parse(m1),
+             {f5, _} <- Float.parse(m5),
+             {f15, _} <- Float.parse(m15) do
+          %{load_1m: f1, load_5m: f5, load_15m: f15}
+        else
+          _ -> %{}
+        end
+      end
+
+      defp cpu_utilization do
+        ensure_os_mon_started()
+
+        case :cpu_sup.util([:detailed]) do
+          {:all, _busy_pct, _idle_pct, kw} when is_list(kw) ->
+            %{
+              user_pct: Keyword.get(kw, :user, 0.0) * 1.0,
+              system_pct: Keyword.get(kw, :kernel, 0.0) * 1.0,
+              iowait_pct: Keyword.get(kw, :wait, 0.0) * 1.0
+            }
+
+          _ ->
+            %{}
+        end
+      rescue
+        _ -> %{}
+      end
+
+      defp parse_meminfo(content) do
+        kb_by_key =
+          content
+          |> String.split("\n", trim: true)
+          |> Enum.reduce(%{}, fn line, acc ->
+            with [key, value] <- String.split(line, ~r/:\s+/, parts: 2),
+                 {kb, _} <- Integer.parse(value) do
+              Map.put(acc, key, kb * 1024)
+            else
+              _ -> acc
+            end
+          end)
+
+        total = Map.get(kb_by_key, "MemTotal", 0)
+        available = Map.get(kb_by_key, "MemAvailable", 0)
+        swap_total = Map.get(kb_by_key, "SwapTotal", 0)
+        swap_free = Map.get(kb_by_key, "SwapFree", 0)
+
+        %{
+          total_bytes: total,
+          available_bytes: available,
+          used_bytes: max(total - available, 0),
+          cached_bytes: Map.get(kb_by_key, "Cached", 0),
+          swap_total_bytes: swap_total,
+          swap_used_bytes: max(swap_total - swap_free, 0)
+        }
+      end
+
+      defp find_root_mount do
+        Enum.find(:disksup.get_disk_data(), fn {key, _, _} ->
+          key in [~c"/", ~c"/root"]
+        end)
+      end
+
+      defp ensure_os_mon_started do
+        case Application.ensure_all_started(:os_mon) do
+          {:ok, _} -> :ok
+          {:error, {:already_started, _}} -> :ok
+          _ -> :error
+        end
+      end
+      '''
+    end
+
+    defp maybe_add_os_mon(igniter, options) do
+      if options[:example] do
+        Igniter.Project.MixProject.update(igniter, :application, [:extra_applications], fn
+          nil ->
+            {:ok, {:code, [:logger, :os_mon]}}
+
+          zipper ->
+            Igniter.Code.List.append_new_to_list(zipper, :os_mon)
+        end)
+      else
+        igniter
+      end
     end
 
     defp seed_application_config(igniter, app_name) do
