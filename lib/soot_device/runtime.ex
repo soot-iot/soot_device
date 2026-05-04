@@ -31,7 +31,18 @@ defmodule SootDevice.Runtime do
   @spec start_link(module(), keyword()) :: Supervisor.on_start()
   def start_link(device, extra_opts \\ []) do
     children = child_specs(device, extra_opts)
-    Supervisor.start_link(children, strategy: :rest_for_one, name: extra_opts[:name] || device)
+
+    # Devices commonly hit transient network errors that take several
+    # seconds to clear; the default 3-restarts-in-5-seconds is too
+    # tight for that. Allow 5 in 60 — bounded enough to escalate a
+    # truly broken device, generous enough to ride out a slow DHCP
+    # lease.
+    Supervisor.start_link(children,
+      strategy: :rest_for_one,
+      name: extra_opts[:name] || device,
+      max_restarts: 5,
+      max_seconds: 60
+    )
   end
 
   @doc """
@@ -92,14 +103,19 @@ defmodule SootDevice.Runtime do
 
     telemetry_opts = build_telemetry_opts(device, base_url, storage, extra_opts)
 
+    # Order matters: :rest_for_one cascades restarts down the list,
+    # so Enrollment must come first, MQTT before any module that
+    # publishes through it, etc.
     [
-      {Enrollment, enrollment_opts}
+      {true, Enrollment, enrollment_opts},
+      {mqtt_opts != nil, MQTT.Client, mqtt_opts},
+      {true, Contract.Refresh, contract_opts},
+      {shadow_opts != nil, Shadow.Sync, shadow_opts},
+      {commands_opts != nil, Commands.Dispatcher, commands_opts},
+      {telemetry_opts != nil, Telemetry.Pipeline, telemetry_opts}
     ]
-    |> append_if(mqtt_opts != nil, fn -> {MQTT.Client, mqtt_opts} end)
-    |> Kernel.++([{Contract.Refresh, contract_opts}])
-    |> append_if(shadow_opts != nil, fn -> {Shadow.Sync, shadow_opts} end)
-    |> append_if(commands_opts != nil, fn -> {Commands.Dispatcher, commands_opts} end)
-    |> append_if(telemetry_opts != nil, fn -> {Telemetry.Pipeline, telemetry_opts} end)
+    |> Enum.filter(fn {include?, _, _} -> include? end)
+    |> Enum.map(fn {_, mod, opts} -> {mod, opts} end)
   end
 
   # ─── option builders ────────────────────────────────────────────────
@@ -245,7 +261,4 @@ defmodule SootDevice.Runtime do
   defp to_pascal(:shadow), do: "Shadow"
   defp to_pascal(:commands), do: "Commands"
   defp to_pascal(:telemetry), do: "Telemetry"
-
-  defp append_if(list, false, _fun), do: list
-  defp append_if(list, true, fun), do: list ++ [fun.()]
 end
