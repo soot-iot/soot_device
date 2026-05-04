@@ -95,6 +95,12 @@ if Code.ensure_loaded?(Igniter) do
       igniter
       |> copy_test_files(app_name, app_module, options)
       |> maybe_add_duxedo_dep(options)
+      # `<App>.QEMU` lives under `test/support/`, so the consumer's
+      # mix.exs must compile that folder in :test. igniter.new +
+      # nerves.new doesn't add this by default; ensure_test_support/1
+      # is idempotent — it no-ops if `elixirc_paths` is already
+      # configured.
+      |> Igniter.Project.Test.ensure_test_support()
       |> scaffold_qemu_helper(qemu_module, app_module, app_name)
       |> scaffold_vm_args(app_name, app_module)
       |> patch_target_dist_config()
