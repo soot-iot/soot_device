@@ -8,9 +8,64 @@ defmodule Mix.Tasks.SootDevice.Gen.TestsTest do
       info = Mix.Tasks.SootDevice.Gen.Tests.info([], nil)
 
       assert info.group == :soot
-      assert info.schema == [yes: :boolean]
-      assert info.aliases == [y: :yes]
+      assert info.schema == [yes: :boolean, example: :boolean]
+      assert info.aliases == [y: :yes, e: :example]
       assert info.composes == []
+    end
+
+    test "defaults to --example so standalone invocation matches install" do
+      info = Mix.Tasks.SootDevice.Gen.Tests.info([], nil)
+      assert info.defaults[:example] == true
+    end
+  end
+
+  describe "telemetry test (--example)" do
+    test "creates test/<app>/telemetry_test.exs" do
+      test_project(files: %{})
+      |> Igniter.compose_task("soot_device.gen.tests", [])
+      |> assert_creates("test/test/telemetry_test.exs")
+    end
+
+    test "covers SystemHealth, :telemetry events, and Duxedo capture" do
+      result =
+        test_project(files: %{})
+        |> Igniter.compose_task("soot_device.gen.tests", [])
+
+      diff = diff(result, only: "test/test/telemetry_test.exs")
+
+      # Module + alias rewrites
+      assert diff =~ "defmodule Test.TelemetryTest"
+      assert diff =~ "Test.Telemetry.SystemHealth"
+
+      # Three coverage sections live in this file.
+      assert diff =~ "system health samplers"
+      assert diff =~ ":telemetry events from Pipeline.write"
+      assert diff =~ "local capture + query through Duxedo"
+
+      # The :telemetry event we assert on must match the event the
+      # pipeline actually emits — keep these in lock-step.
+      assert diff =~ "[:soot_device, :pipeline, :write]"
+      assert diff =~ "Duxedo.Streams.take_oldest"
+    end
+
+    test "adds :duxedo as a dep so Buffer.Duxedo is available at compile time" do
+      result =
+        test_project(files: %{})
+        |> Igniter.compose_task("soot_device.gen.tests", [])
+
+      diff = diff(result, only: "mix.exs")
+      assert diff =~ ":duxedo"
+      assert diff =~ "soot-iot/duxedo"
+    end
+
+    test "skips telemetry_test.exs and the :duxedo dep under --no-example" do
+      result =
+        test_project(files: %{})
+        |> Igniter.compose_task("soot_device.gen.tests", ["--no-example"])
+
+      full_diff = diff(result)
+      refute full_diff =~ "test/test/telemetry_test.exs"
+      refute full_diff =~ ":duxedo"
     end
   end
 

@@ -110,9 +110,19 @@ if Code.ensure_loaded?(Igniter) do
     # scaffolding the test suite + `<App>.QEMU` helper + `rel/vm.args.eex`.
     # The default is on; `--no-tests` skips composition for operators
     # who want a bare install.
+    #
+    # `--example` flows through so the example-only telemetry test +
+    # the `:duxedo` dep land alongside `<App>.Telemetry.SystemHealth`.
     defp maybe_compose_gen_tests(igniter, options) do
       if options[:tests] do
-        Igniter.compose_task(igniter, "soot_device.gen.tests", [])
+        argv =
+          case options[:example] do
+            true -> ["--example"]
+            false -> ["--no-example"]
+            _ -> []
+          end
+
+        Igniter.compose_task(igniter, "soot_device.gen.tests", argv)
       else
         igniter
       end

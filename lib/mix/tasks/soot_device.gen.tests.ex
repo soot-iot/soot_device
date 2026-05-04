@@ -66,7 +66,8 @@ if Code.ensure_loaded?(Igniter) do
 
     use Igniter.Mix.Task
 
-    @test_files ~w(device_test.exs qemu_test.exs)
+    @base_test_files ~w(device_test.exs qemu_test.exs)
+    @example_test_files ~w(telemetry_test.exs)
 
     @impl Igniter.Mix.Task
     def info(_argv, _composing_task) do
@@ -75,31 +76,43 @@ if Code.ensure_loaded?(Igniter) do
         example: __MODULE__.Docs.example(),
         only: nil,
         composes: [],
-        schema: [yes: :boolean],
-        defaults: [yes: false],
-        aliases: [y: :yes]
+        schema: [yes: :boolean, example: :boolean],
+        # `--example` defaults to true here so a standalone
+        # `mix soot_device.gen.tests` matches the experience of
+        # `mix soot_device.install` (which also defaults to ON).
+        defaults: [yes: false, example: true],
+        aliases: [y: :yes, e: :example]
       }
     end
 
     @impl Igniter.Mix.Task
     def igniter(igniter) do
+      options = igniter.args.options
       app_name = Igniter.Project.Application.app_name(igniter)
       app_module = Igniter.Project.Module.module_name_prefix(igniter)
       qemu_module = Igniter.Project.Module.module_name(igniter, "QEMU")
 
       igniter
-      |> copy_test_files(app_name, app_module)
+      |> copy_test_files(app_name, app_module, options)
+      |> maybe_add_duxedo_dep(options)
       |> scaffold_qemu_helper(qemu_module, app_module, app_name)
       |> scaffold_vm_args(app_name, app_module)
       |> patch_target_dist_config()
       |> patch_test_helper()
-      |> note_next_steps(app_name, qemu_module)
+      |> note_next_steps(app_name, qemu_module, options)
     end
 
-    defp copy_test_files(igniter, app_name, app_module) do
+    defp copy_test_files(igniter, app_name, app_module, options) do
       app_subdir = Atom.to_string(app_name)
 
-      Enum.reduce(@test_files, igniter, fn filename, igniter ->
+      files =
+        if options[:example] do
+          @base_test_files ++ @example_test_files
+        else
+          @base_test_files
+        end
+
+      Enum.reduce(files, igniter, fn filename, igniter ->
         contents =
           filename
           |> template_path()
@@ -110,6 +123,24 @@ if Code.ensure_loaded?(Igniter) do
 
         Igniter.create_new_file(igniter, destination, contents, on_exists: :skip)
       end)
+    end
+
+    # The example telemetry test exercises the SootDeviceProtocol →
+    # Duxedo capture path; that requires `:duxedo` in the operator's
+    # deps so `Buffer.Duxedo` (which is gated on
+    # `Code.ensure_loaded?(Duxedo.Streams)` at compile time) is
+    # available. The dep is published only as a github-tracked branch
+    # in the soot ecosystem today, matching the convention used by
+    # soot_device_protocol's optional Duxedo backend.
+    defp maybe_add_duxedo_dep(igniter, options) do
+      if options[:example] do
+        Igniter.Project.Deps.add_dep(
+          igniter,
+          {:duxedo, github: "soot-iot/duxedo", branch: "main"}
+        )
+      else
+        igniter
+      end
     end
 
     # `<App>.QEMU` lives in `test/support/`, namespaced under the
@@ -233,7 +264,22 @@ if Code.ensure_loaded?(Igniter) do
       Path.join([priv, "templates", "tests", filename])
     end
 
-    defp note_next_steps(igniter, app_name, qemu_module) do
+    defp note_next_steps(igniter, app_name, qemu_module, options) do
+      telemetry_lines =
+        if options[:example] do
+          """
+
+            * `test/#{app_name}/telemetry_test.exs` — `:telemetry` event
+              emission + local Duxedo capture/query (added under
+              `--example`).
+            * `:duxedo` added to `mix.exs` deps (github main branch),
+              required by the telemetry test's Duxedo describe block.
+              Run `mix deps.get` once the install completes.
+          """
+        else
+          ""
+        end
+
       Igniter.add_notice(igniter, """
       Default test scaffolding generated.
 
@@ -244,7 +290,7 @@ if Code.ensure_loaded?(Igniter) do
         * `test/support/qemu.ex` — `#{inspect(qemu_module)}` boot/RPC helper.
         * `rel/vm.args.eex` — distribution flags gated on
           `MIX_ENV=test`.
-
+      #{telemetry_lines}
       Patched:
         * `config/target.exs` — `:kernel, inet_dist_listen_min/max:
           9100` so the QEMU port forward matches the dist port.

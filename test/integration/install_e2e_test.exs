@@ -51,6 +51,11 @@ defmodule SootDevice.InstallE2ETest do
       label: "soot_device.install"
     )
 
+    # The installer composes `soot_device.gen.tests` which adds the
+    # `:duxedo` dep so the example telemetry test compiles. Fetch
+    # the new transitive deps before running tests.
+    run_step!(["deps.get"], cd: project_path, label: "deps.get (post-install)")
+
     {output, code} =
       System.cmd("mix", ["test"],
         cd: project_path,
@@ -71,6 +76,11 @@ defmodule SootDevice.InstallE2ETest do
     # generator wrote the file as a sanity check.
     assert File.exists?(Path.join([project_path, "test", @app_name, "qemu_test.exs"])),
            "qemu_test.exs not generated"
+
+    # `--example` (default ON) scaffolds the telemetry test that
+    # exercises :telemetry events + Duxedo capture.
+    assert File.exists?(Path.join([project_path, "test", @app_name, "telemetry_test.exs"])),
+           "telemetry_test.exs not generated under --example"
 
     assert File.exists?(Path.join([project_path, "test/support/qemu.ex"])),
            "qemu.ex helper not generated"
