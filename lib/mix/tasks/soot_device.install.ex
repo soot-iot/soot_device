@@ -95,7 +95,7 @@ if Code.ensure_loaded?(Igniter) do
 
       igniter
       |> Igniter.Project.Formatter.import_dep(:soot_device)
-      |> create_config_module(config_module, app_name)
+      |> create_config_module(config_module, app_name, device_module)
       |> create_device_module(device_module, health_module, options)
       |> maybe_create_health_module(health_module, options)
       |> maybe_add_os_mon(options)
@@ -164,14 +164,15 @@ if Code.ensure_loaded?(Igniter) do
       end
     end
 
-    defp create_config_module(igniter, config_module, app_name) do
+    defp create_config_module(igniter, config_module, app_name, device_module) do
       Igniter.Project.Module.create_module(
         igniter,
         config_module,
         """
         @moduledoc \"\"\"
         Reads the device-side configuration that the `SootDevice` DSL
-        runtime uses at boot.
+        runtime uses at boot, and gates whether the device supervisor
+        actually starts.
 
         The `SootDevice` `use` declaration takes `contract_url`,
         `enroll_url`, and `serial` at compile time. Production devices
@@ -179,14 +180,67 @@ if Code.ensure_loaded?(Igniter) do
         keyword list passed to the device module's child_spec, where
         `SootDevice.Runtime` merges them over the compile-time values.
 
+        ## Supervisor gating
+
+        The device runtime opens storage, reads bootstrap PEMs, and
+        contacts the backend on boot — none of which work on a
+        developer host. `child_spec/1` here therefore skips the device
+        child by default whenever `Mix.target() == :host` (the
+        Nerves-idiomatic gate, captured at compile time). Override at
+        runtime by setting `Application.put_env(:#{app_name},
+        :start_device_supervisor, true_or_false)` before the
+        application starts.
+
         Generated stub — adjust freely.
         \"\"\"
 
         @app :#{app_name}
 
+        # `Mix.target/0` is a Mix-only function, so we have to capture
+        # it at compile time — Mix isn't available inside a release.
+        @start_default Mix.target() != :host
+
+        @doc \"\"\"
+        Returns a child spec the operator's application supervisor
+        can drop in. When `:start_device_supervisor` (default
+        `Mix.target() != :host`) is true, this delegates to
+        `#{inspect(device_module)}.child_spec/1`. Otherwise it
+        returns a no-op child whose `start_link/1` returns
+        `:ignore`, so host `mix test` runs cleanly without booting
+        the device runtime.
+        \"\"\"
+        @spec child_spec(term()) :: Supervisor.child_spec()
+        def child_spec(_arg) do
+          if start_supervisor?() do
+            #{inspect(device_module)}.child_spec(device_opts())
+          else
+            %{
+              id: __MODULE__,
+              start: {__MODULE__, :start_link, [:noop]},
+              type: :worker,
+              restart: :temporary
+            }
+          end
+        end
+
+        @doc false
+        @spec start_link(:noop) :: :ignore
+        def start_link(:noop), do: :ignore
+
+        @doc \"\"\"
+        Returns `true` if the application supervisor should start the
+        device runtime. Reads `Application.get_env(:#{app_name},
+        :start_device_supervisor)` with a `Mix.target() != :host`
+        compile-time default.
+        \"\"\"
+        @spec start_supervisor?() :: boolean()
+        def start_supervisor? do
+          Application.get_env(@app, :start_device_supervisor, @start_default)
+        end
+
         @doc \"\"\"
         Builds the keyword list passed as `extra_opts` to
-        `<App>.Device.child_spec/1`.
+        `#{inspect(device_module)}.child_spec/1`.
         \"\"\"
         @spec device_opts(keyword()) :: keyword()
         def device_opts(overrides \\\\ []) do
@@ -495,16 +549,15 @@ if Code.ensure_loaded?(Igniter) do
       )
     end
 
-    defp add_supervisor_child(igniter, device_module, config_module) do
-      child_opts_ast =
-        quote do
-          unquote(config_module).device_opts()
-        end
-
-      Igniter.Project.Application.add_new_child(
-        igniter,
-        {device_module, {:code, child_opts_ast}}
-      )
+    # The supervisor child is `<App>.SootDeviceConfig`, not
+    # `<App>.Device`. The config module's `child_spec/1` gates on
+    # `Mix.target/0` (captured at compile time, with a runtime
+    # override) so a host `mix test` does not boot the device
+    # runtime — opening storage + reading bootstrap PEMs would crash
+    # without a real device backing it. On Nerves targets the
+    # wrapper delegates straight to `<App>.Device.child_spec/1`.
+    defp add_supervisor_child(igniter, _device_module, config_module) do
+      Igniter.Project.Application.add_new_child(igniter, config_module)
     end
 
     defp note_next_steps(igniter, app_name, device_module, qemu_module, options) do
