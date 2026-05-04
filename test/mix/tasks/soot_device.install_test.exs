@@ -10,6 +10,7 @@ defmodule Mix.Tasks.SootDevice.InstallTest do
 
       assert info.schema == [
                example: :boolean,
+               tests: :boolean,
                yes: :boolean,
                bootstrap_cert: :string,
                bootstrap_key: :string
@@ -22,7 +23,9 @@ defmodule Mix.Tasks.SootDevice.InstallTest do
                k: :bootstrap_key
              ]
 
-      assert info.composes == []
+      # gen.tests does the test/QEMU/vm.args/target.exs scaffolding;
+      # install composes it by default.
+      assert info.composes == ["soot_device.gen.tests"]
     end
   end
 
@@ -244,18 +247,39 @@ defmodule Mix.Tasks.SootDevice.InstallTest do
 
       notices = Enum.join(igniter.notices, "\n")
       # See the QEMU scaffolding tests for why the path lacks the
-      # repeated app segment.
+      # repeated app segment. Tests-default composition surfaces the
+      # qemu helper path + tag convention through the gen.tests
+      # notice, but the install notice still mentions both for the
+      # tests-on case.
       assert notices =~ "test/support/qemu.ex"
       assert notices =~ ":qemu"
-      assert notices =~ "MIX_TARGET=qemu_aarch64 mix firmware"
+      assert notices =~ "MIX_TARGET=qemu_aarch64 MIX_ENV=test mix firmware"
+    end
+
+    test "skips test scaffolding when --no-tests is set" do
+      igniter =
+        test_project(files: %{})
+        |> Igniter.compose_task("soot_device.install", ["--no-tests"])
+
+      diff = diff(igniter)
+      refute diff =~ "test/support/qemu.ex"
+      refute diff =~ "rel/vm.args.eex"
+      refute diff =~ "test/test/device_test.exs"
+      refute diff =~ "test/test/qemu_test.exs"
+
+      notices = Enum.join(igniter.notices, "\n")
+      assert notices =~ "soot_device.gen.tests"
     end
   end
 
-  describe "QEMU test helper scaffolding" do
+  describe "QEMU test helper scaffolding (composed via gen.tests)" do
     # `proper_location` with `module_location: :outside_matching_folder`
     # (the default) strips the app prefix when it matches the source
     # folder's parent, so `Test.QEMU` under `test/support` lands at
     # `test/support/qemu.ex` rather than `test/support/test/qemu.ex`.
+    # The tests below run against `soot_device.install` so we verify
+    # the install → gen.tests composition wires the scaffold up
+    # end-to-end.
     test "creates test/support/qemu.ex" do
       test_project(files: %{})
       |> Igniter.compose_task("soot_device.install", [])

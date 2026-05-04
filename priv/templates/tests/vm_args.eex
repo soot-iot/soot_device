@@ -1,0 +1,56 @@
+## Customize flags given to the VM: https://www.erlang.org/doc/apps/erts/erl_cmd.html
+
+<%= if Mix.env() == :test do %>
+## Long-name distribution + cookie. Conditionally baked into the
+## firmware when built with `MIX_ENV=test mix firmware`. The host-side
+## `MyDevice.QEMU` helper connects to this node by name so the QEMU
+## integration suite can drive the device over `:rpc`. Production /
+## dev firmware (the default) ships without distribution and is not
+## reachable over the network.
+-name soot-device@127.0.0.1
+-setcookie my_device_test_cookie
+<% end %>
+
+## Use Ctrl-C to interrupt the current shell rather than invoking the emulator's
+## break handler and possibly exiting the VM.
++Bc
+
+## Require an initialization handshake within 10 minutes from the startup guard.
+## See https://hexdocs.pm/nerves_runtime/readme.html#assisted-firmware-validation-and-automatic-revert
+-env HEART_INIT_TIMEOUT 600
+
+## Allow time warps so the Erlang system time can more closely match the OS
+## system time.
++C multi_time_warp
+
+## Load code as per the boot script since not using archives.
+## See https://www.erlang.org/doc/man/init.html#command-line-flags
+-code_path_choice strict
+
+## Disable scheduler busy wait to reduce idle CPU usage and avoid delaying
+## other OS processes. See https://www.erlang.org/doc/apps/erts/erl_cmd.html#+sbwt
++sbwt none
++sbwtdcpu none
++sbwtdio none
+
+## Save the shell history between reboots
+-kernel shell_history enabled
+
+## Enable heartbeat monitoring of the Erlang runtime system
+-heart -env HEART_BEAT_TIMEOUT 30
+
+## Start the Elixir shell
+
+-noshell
+-user elixir
+-run elixir start_cli
+
+## Enable colors in the shell
+-elixir ansi_enabled true
+
+## Options added after -extra are interpreted as plain arguments and can be
+## retrieved using :init.get_plain_arguments(). Options before the "--" are
+## interpreted by Elixir; anything after is left for IEx and user applications.
+-extra --no-halt
+--
+--dot-iex /etc/iex.exs
