@@ -26,16 +26,18 @@ defmodule MyDevice.QEMUTest do
 
   alias MyDevice.QEMU
 
+  # ExUnit's `setup/1` callback can only return `:ok | keyword | map`;
+  # `{:skip, reason}` is not a valid setup return. The `:qemu`
+  # moduletag already excludes the suite by default, so reaching this
+  # setup means the operator opted in with `--include qemu` —
+  # firmware/qemu *should* be there. Match-fail loudly with the real
+  # reason (`{:error, :firmware_not_built}` etc.) if a prerequisite is
+  # missing rather than papering over it.
   setup do
-    case QEMU.available?() do
-      :ok ->
-        {:ok, qemu} = QEMU.boot(timeout: 90_000)
-        on_exit(fn -> QEMU.stop(qemu) end)
-        {:ok, qemu: qemu}
-
-      {:error, reason} ->
-        {:skip, "qemu unavailable: #{inspect(reason)}"}
-    end
+    :ok = QEMU.available?()
+    {:ok, qemu} = QEMU.boot(timeout: 90_000)
+    on_exit(fn -> QEMU.stop(qemu) end)
+    {:ok, qemu: qemu}
   end
 
   test "device node responds to a remote :erlang.node/0", %{qemu: qemu} do
