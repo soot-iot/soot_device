@@ -131,13 +131,65 @@ defmodule MyDevice.QEMU do
   Returns the absolute path to the latest qemu_aarch64 firmware
   image, or `nil` if no image has been built. Looks in
   `_build/qemu_aarch64_*/nerves/images/`.
+
+  `mix firmware` produces a `.fw` file (an `fwup` archive) — QEMU
+  needs a raw disk image. If only the `.fw` exists, this function
+  shells out to `fwup -a -t complete -d <name>.img -i <name>.fw`
+  to produce one beside it. Subsequent calls reuse the cached
+  `.img` until the `.fw` is rebuilt newer than it.
   """
   @spec firmware_image_path() :: String.t() | nil
   def firmware_image_path do
+    case latest_image() do
+      nil -> maybe_build_image()
+      img -> img
+    end
+  end
+
+  defp latest_image do
     "_build/qemu_aarch64_*/nerves/images/*.img"
     |> Path.wildcard()
-    |> Enum.sort_by(&File.stat!(&1).mtime, :desc)
-    |> List.first()
+    |> latest()
+  end
+
+  defp maybe_build_image do
+    fw =
+      "_build/qemu_aarch64_*/nerves/images/*.fw"
+      |> Path.wildcard()
+      |> latest()
+
+    cond do
+      fw == nil ->
+        nil
+
+      System.find_executable("fwup") == nil ->
+        nil
+
+      true ->
+        fwup_to_img!(fw)
+    end
+  end
+
+  defp latest([]), do: nil
+  defp latest(paths), do: Enum.max_by(paths, &File.stat!(&1).mtime)
+
+  defp fwup_to_img!(fw_path) do
+    img_path = Path.rootname(fw_path) <> ".img"
+
+    if File.exists?(img_path) and
+         File.stat!(img_path).mtime >= File.stat!(fw_path).mtime do
+      img_path
+    else
+      args = ["-a", "-t", "complete", "-d", img_path, "-i", fw_path]
+
+      case System.cmd("fwup", args, stderr_to_stdout: true) do
+        {_, 0} ->
+          img_path
+
+        {output, code} ->
+          raise "fwup failed (exit #{code}) building #{img_path} from #{fw_path}:\n#{output}"
+      end
+    end
   end
 
   defp open_port(image, extra) do
