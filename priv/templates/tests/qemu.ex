@@ -181,6 +181,12 @@ defmodule MyDevice.QEMU do
       Node.set_cookie(cookie)
       :ok
     else
+      # Node.start/2 requires EPMD to be running. CI runners don't
+      # auto-start it; `epmd -daemon` exits 0 if already up. We
+      # discard the result either way — Node.start/2 surfaces a
+      # missing epmd binary as :dist_failed below.
+      _ = System.cmd("epmd", ["-daemon"], stderr_to_stdout: true)
+
       case Node.start(:"soot-device-test-host@127.0.0.1", :longnames) do
         {:ok, _} ->
           Node.set_cookie(cookie)
