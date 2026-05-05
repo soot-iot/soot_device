@@ -13,8 +13,21 @@ defmodule MyDevice.QEMU do
     2. Launch `qemu-system-aarch64` with user-mode networking and
        hostfwd port forwards for EPMD (4369) and the pinned
        distribution port (9100).
-    3. Poll `Node.connect/1` until the device's node registers.
-    4. Return a handle that callers can pass to `rpc/4` and `stop/1`.
+    3. Poll the QEMU forward until the *guest's* EPMD is reachable
+       (`:erl_epmd.names('127.0.0.1')` succeeds — that's the guest's
+       EPMD answering through the port forward).
+    4. Start host distribution (`Node.start/2`). Because no host EPMD
+       exists, `Node.start/2` registers the host node with whatever
+       EPMD answers on host:4369 — which, thanks to the port forward,
+       is the guest's EPMD. Both nodes now share one EPMD, so
+       `Node.connect/1` finds the guest by name.
+    5. Poll `Node.connect/1` until the device's node registers.
+    6. Return a handle that callers can pass to `rpc/4` and `stop/1`.
+
+  This deliberately runs no host EPMD: a host EPMD on :4369 would
+  collide with QEMU's `hostfwd=tcp::4369-:4369` and the forward
+  wouldn't bind. The single shared EPMD inside the guest is the
+  rendezvous point.
 
   User-mode networking (`-netdev user`) needs no special privileges,
   so this works on developer laptops, CI runners, and Docker hosts
@@ -78,20 +91,25 @@ defmodule MyDevice.QEMU do
     cookie = Keyword.get(opts, :cookie, @cookie)
     device_node = Keyword.get(opts, :device_node, @device_node)
 
-    with :ok <- available?(),
-         :ok <- ensure_distribution_running(cookie) do
+    with :ok <- available?() do
       image = Keyword.get(opts, :image) || firmware_image_path()
       timeout = Keyword.get(opts, :timeout, 60_000)
       extra = Keyword.get(opts, :extra_args, [])
       tmp = Path.join(System.tmp_dir!(), "soot-qemu-#{System.unique_integer([:positive])}")
       File.mkdir_p!(tmp)
 
+      # 1. Open QEMU first so the host:4369 → guest:4369 port forward
+      #    is bound. Until guest EPMD comes up, the forward returns
+      #    refused/closed; we poll for it next.
       port = open_port(image, extra)
 
-      case wait_for_node(device_node, timeout) do
-        :ok ->
-          {:ok, %__MODULE__{port: port, node: device_node, tmp_dir: tmp}}
-
+      # 2. Wait until the guest's EPMD is actually answering through
+      #    the forward, then 3. start host distribution against it.
+      with :ok <- wait_for_guest_epmd(timeout),
+           :ok <- ensure_distribution_running(cookie),
+           :ok <- wait_for_node(device_node, timeout) do
+        {:ok, %__MODULE__{port: port, node: device_node, tmp_dir: tmp}}
+      else
         {:error, reason} ->
           stop_port(port)
           File.rm_rf!(tmp)
@@ -241,6 +259,30 @@ defmodule MyDevice.QEMU do
         {:error, reason} ->
           {:error, {:dist_failed, reason}}
       end
+    end
+  end
+
+  # Polls `:erl_epmd.names('127.0.0.1')` until it succeeds, meaning
+  # the QEMU port forward is now reaching a live EPMD inside the
+  # guest. Until guest userland comes up the connect returns
+  # refused/closed and we retry.
+  defp wait_for_guest_epmd(timeout) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_for_guest_epmd(deadline)
+  end
+
+  defp do_wait_for_guest_epmd(deadline) do
+    case :erl_epmd.names(~c"127.0.0.1") do
+      {:ok, _names} ->
+        :ok
+
+      {:error, _reason} ->
+        if System.monotonic_time(:millisecond) > deadline do
+          {:error, :guest_epmd_did_not_appear}
+        else
+          Process.sleep(500)
+          do_wait_for_guest_epmd(deadline)
+        end
     end
   end
 
