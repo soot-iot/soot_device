@@ -189,17 +189,36 @@ defmodule Mix.Tasks.SootDevice.Gen.TestsTest do
   end
 
   describe "test/test_helper.exs" do
-    test "rewrites a bare ExUnit.start() to ExUnit.start(exclude: [:qemu])" do
+    test "rewrites a bare ExUnit.start() to add :qemu exclude + require_file" do
       result =
         test_project(files: %{"test/test_helper.exs" => "ExUnit.start()\n"})
         |> Igniter.compose_task("soot_device.gen.tests", [])
 
       diff = diff(result, only: "test/test_helper.exs")
       assert diff =~ "ExUnit.start(exclude: [:qemu])"
+      assert diff =~ "Code.require_file"
+      assert diff =~ "support/qemu.ex"
     end
 
-    test "is a no-op when :qemu is already excluded" do
+    test "appends require_file to a test_helper that already excludes :qemu but doesn't load qemu.ex" do
       contents = "ExUnit.start(exclude: [:qemu, :integration])\n"
+
+      result =
+        test_project(files: %{"test/test_helper.exs" => contents})
+        |> Igniter.compose_task("soot_device.gen.tests", [])
+
+      diff = diff(result, only: "test/test_helper.exs")
+      assert diff =~ "Code.require_file"
+      assert diff =~ "support/qemu.ex"
+    end
+
+    test "is a no-op when test_helper already loads support/qemu.ex" do
+      contents = """
+      ExUnit.start(exclude: [:qemu])
+
+      qemu_helper = Path.expand("support/qemu.ex", __DIR__)
+      if File.exists?(qemu_helper), do: Code.require_file(qemu_helper)
+      """
 
       result =
         test_project(files: %{"test/test_helper.exs" => contents})
@@ -215,6 +234,8 @@ defmodule Mix.Tasks.SootDevice.Gen.TestsTest do
 
       diff = diff(result, only: "test/test_helper.exs")
       assert diff =~ "ExUnit.start(exclude: [:qemu])"
+      assert diff =~ "Code.require_file"
+      assert diff =~ "support/qemu.ex"
     end
 
     test "emits a notice when test_helper.exs is non-default and unpatchable" do

@@ -207,20 +207,31 @@ if Code.ensure_loaded?(Igniter) do
       )
     end
 
-    # If `test/test_helper.exs` is the bare `mix new` default
-    # (`ExUnit.start()`), replace it with an explicit `exclude:
-    # [:qemu]`. Anything already-customized is left alone with a
-    # notice — operators own the file. Idempotent on the patched
-    # form because the second pass sees `:qemu` and bails out.
+    # Patch `test/test_helper.exs` to:
+    #
+    #   1. Exclude `:qemu` so the QEMU integration tests skip cleanly
+    #      when no firmware image is built.
+    #   2. Explicitly load `test/support/qemu.ex` via `Code.require_file/1`.
+    #
+    # The require_file step is a belt-and-braces fallback for projects
+    # whose `elixirc_paths(:test)` doesn't include `"test/support"` —
+    # `Igniter.Project.Test.ensure_test_support/1` (called separately)
+    # handles the typical mix.exs shapes, but
+    # `mix igniter.new --with nerves.new` produces a mix.exs whose
+    # `elixirc_paths` keyword check no-ops the helper. Without the
+    # explicit require, `<App>.QEMU` never compiles in :test and
+    # every test in `qemu_test.exs` dies with `UndefinedFunctionError`
+    # before reaching the `:qemu` exclude check. `Code.require_file/1`
+    # is idempotent — returns nil when the module is already loaded.
     defp patch_test_helper(igniter) do
       path = "test/test_helper.exs"
-      default_contents = "ExUnit.start(exclude: [:qemu])\n"
+      default_contents = test_helper_default()
 
       Igniter.create_or_update_file(igniter, path, default_contents, fn source ->
         contents = Rewrite.Source.get(source, :content)
 
         cond do
-          String.contains?(contents, ":qemu") ->
+          String.contains?(contents, "support/qemu.ex") ->
             source
 
           String.contains?(contents, "ExUnit.start()") ->
@@ -228,9 +239,13 @@ if Code.ensure_loaded?(Igniter) do
               String.replace(
                 contents,
                 "ExUnit.start()",
-                "ExUnit.start(exclude: [:qemu])"
+                "ExUnit.start(exclude: [:qemu])\n\n#{qemu_require_block()}"
               )
 
+            Rewrite.Source.update(source, :content, new_contents)
+
+          String.contains?(contents, ":qemu") ->
+            new_contents = contents <> "\n" <> qemu_require_block()
             Rewrite.Source.update(source, :content, new_contents)
 
           true ->
@@ -238,11 +253,30 @@ if Code.ensure_loaded?(Igniter) do
              """
              test/test_helper.exs is non-default; skipped automatic
              patch. Add `exclude: [:qemu]` to its `ExUnit.start/1`
-             call so the generated QEMU integration tests skip
-             cleanly when no firmware image is built.
+             call, then append:
+
+             #{qemu_require_block()}
              """}
         end
       end)
+    end
+
+    defp test_helper_default do
+      """
+      ExUnit.start(exclude: [:qemu])
+
+      #{qemu_require_block()}
+      """
+    end
+
+    defp qemu_require_block do
+      """
+      # `<App>.QEMU` lives in `test/support/qemu.ex`. Belt-and-braces
+      # load — if `elixirc_paths(:test)` already includes test/support,
+      # `Code.require_file/1` no-ops on the second load.
+      qemu_helper = Path.expand("support/qemu.ex", __DIR__)
+      if File.exists?(qemu_helper), do: Code.require_file(qemu_helper)
+      """
     end
 
     # Order matters:
